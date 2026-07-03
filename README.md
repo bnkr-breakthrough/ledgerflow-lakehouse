@@ -1,77 +1,103 @@
-# LedgerFlow Lakehouse
+# LedgerFlow Lakehouse — CDC-Driven Banking Data Platform
 
-> **CDC-driven banking data lakehouse on Databricks** — Senior Data Engineer portfolio project demonstrating real-time Change Data Capture, Delta Live Tables, Unity Catalog governance, and end-to-end pipeline orchestration. Built entirely on free resources (Docker + Azure $200 credit).
+> **Portfolio Project** | Beeram Neela Konda Reddy | Databricks · Delta Lake · Kafka · Azure
+
+[![Databricks](https://img.shields.io/badge/Databricks-Delta%20Live%20Tables-red?logo=databricks)](https://databricks.com)
+[![Azure](https://img.shields.io/badge/Azure-ADLS%20Gen2-blue?logo=microsoftazure)](https://azure.microsoft.com)
+[![Kafka](https://img.shields.io/badge/Apache-Kafka-black?logo=apachekafka)](https://kafka.apache.org)
+[![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://python.org)
+
+---
+
+## What This Project Demonstrates
+
+A real-time banking data lakehouse that handles the core challenges of CDC-based pipelines — not just happy-path ingestion:
+
+| Problem | How It's Handled |
+|---|---|
+| **Real-time change capture** | PostgreSQL WAL → Debezium → Kafka — captures every INSERT, UPDATE, DELETE |
+| **Out-of-order CDC events** | DLT `APPLY CHANGES INTO` with `sequence_by="__ts_ms"` — correct merge regardless of arrival order |
+| **Data quality enforcement** | DLT Expectations (`expect_or_drop`) — bad records routed to quarantine table, never silently dropped |
+| **Credential-free cloud access** | Azure Managed Identity + Unity Catalog External Location — no `spark.conf.set`, no key leakage |
+| **Row & column governance** | Unity Catalog row filters + column masks — non-admins see filtered cities and masked PII |
+
+**Senior-level patterns demonstrated:** CDC merge (SCD Type 1) · medallion architecture · declarative DLT pipelines · Unity Catalog governance · end-to-end Workflow orchestration · E2E test framework
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  SOURCE LAYER                                                            │
-│  PostgreSQL (Docker) ──WAL──▶ Debezium ──▶ Apache Kafka (Docker)        │
-└─────────────────────────────────────┬────────────────────────────────────┘
-                                      │  CDC events (JSON): op=r/c/u/d
-                                      ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  INGESTION BRIDGE                                                        │
-│  kafka_to_adls_bridge.py ──▶ ADLS Gen2 raw/  (NDJSON, partitioned)     │
-│  Batch: 50 events or 30s flush · 277+ files · 560+ events               │
-└─────────────────────────────────────┬────────────────────────────────────┘
-                                      │  abfss://raw@ledgerflowadls/
-                                      ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  BRONZE LAYER  (Databricks Auto Loader)                                  │
-│  cloudFiles → Delta Lake · trigger(availableNow=True)                   │
-│  customers_raw (101) │ loans_raw (112) │ transactions_raw (1540)        │
-│  Unity Catalog: ledgerflow_catalog.bronze.*                              │
-└─────────────────────────────────────┬────────────────────────────────────┘
-                                      │  Delta Live Tables
-                                      ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  SILVER LAYER  (DLT — APPLY CHANGES INTO)                               │
-│  CDC merge SCD Type 1 · DLT Expectations · quarantine table             │
-│  customers (71) │ loans (90) │ transactions (1500+) │ quarantine (0)    │
-│  Unity Catalog: ledgerflow_catalog.silver.*                              │
-│  Governance: row filters · column masks · RBAC grants · lineage         │
-└─────────────────────────────────────┬────────────────────────────────────┘
-                                      │  DLT aggregations
-                                      ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  GOLD LAYER  (Business aggregations)                                     │
-│  portfolio_summary │ customer_risk_profile                               │
-│  daily_collections │ npa_watchlist                                       │
-│  Unity Catalog: ledgerflow_catalog.gold.*                                │
-└─────────────────────────────────────┬────────────────────────────────────┘
-                                      │
-                                      ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  CONSUMPTION LAYER                                                       │
-│  Databricks SQL Dashboard — LedgerFlow Banking Analytics (6 panels)     │
-│  Databricks Workflow — LedgerFlow-Daily-Pipeline (3-task DAG, ~4.5 min) │
-└──────────────────────────────────────────────────────────────────────────┘
+Data Simulator (Python)
+  └── Real-world banking data: Indian names, cities, loan types
+  └── Generates: inserts · updates · deletes via PostgreSQL
+        │
+        ▼  kafka_to_adls_bridge.py  (50 events or 30s flush)
+PostgreSQL WAL → Debezium → Kafka
+        │  CDC events: __op = r / c / u / d
+        ▼
+ADLS Gen2 Raw Zone  ──  NDJSON · partitioned by entity/year/month/day/hour
+        │
+        ▼  01_auto_loader_bronze.py
+Databricks Auto Loader (cloudFiles)
+  ├── Schema inference + evolution (addNewColumns)
+  ├── trigger(availableNow=True) — batch mode
+  └── _metadata.file_path for Unity Catalog lineage
+        │
+        ▼  Delta Live Tables — 02_dlt_silver_gold.py
+Bronze → Silver (APPLY CHANGES INTO)
+  ├── CDC merge: upserts + deletes on customer_id / loan_id
+  ├── DLT Expectations — valid amounts, rates, types
+  └── transactions_quarantine — failed records with _quarantine_reason
+        │
+        ▼
+Silver → Gold (DLT aggregations)
+  ├── portfolio_summary       — exposure by loan type × status
+  ├── customer_risk_profile   — credit tier segmentation
+  ├── daily_collections       — EMI payment totals by date
+  └── npa_watchlist           — defaulted loans with borrower info
+        │
+        ▼  03_unity_catalog_setup.py
+Unity Catalog Governance
+  ├── Row filter: city_row_filter (South Indian cities for non-admins)
+  ├── Column mask: mask_email · mask_income
+  ├── RBAC: GRANT SELECT on Gold to analyst group
+  └── Lineage: auto-tracked Bronze → Silver → Gold
+        │
+        ▼
+Databricks SQL Dashboard — LedgerFlow Banking Analytics (6 panels)
+Databricks Workflow    — 3-task DAG, ~4.5 min end-to-end
 ```
 
 ---
 
-## Tech Stack
+## Key Results
 
-| Layer | Technology |
-|-------|-----------|
-| Source DB | PostgreSQL 14 (Docker) |
-| CDC | Debezium 2.x + `ExtractNewRecordState` SMT |
-| Message Bus | Apache Kafka (Confluent Docker image) + Kafdrop UI |
-| Object Storage | Azure Data Lake Storage Gen2 (ABFS protocol) |
-| Compute | Databricks Serverless + Delta Live Tables |
-| Table Format | Delta Lake (Medallion: Bronze / Silver / Gold) |
-| Governance | Unity Catalog (External Locations, Row Filters, Column Masks, Lineage) |
-| Orchestration | Databricks Workflows (3-task DAG) |
-| Dashboard | Databricks SQL + SQL Warehouse |
-| Language | Python 3.11, PySpark, SQL |
+### Pipeline Run (End-to-End)
+
+| Metric | Value |
+|---|---|
+| Customers in Silver | 71 |
+| Loans in Silver | 90 |
+| Transactions in Silver | 1,500+ |
+| NPA Rate | **11.12%** |
+| Total Loan Book | **₹25.67 Cr** |
+| Active Exposure | ₹22+ Cr |
+
+### Infrastructure
+
+| Metric | Value |
+|---|---|
+| CDC events processed | 560+ |
+| ADLS files uploaded | 277+ |
+| Workflow runtime | **~4.5 minutes** |
+| Workflow runs succeeded | 2 / 2 |
+| E2E test result | **3/3 PASS** |
+| DQ quarantine rate | 0% |
 
 ---
 
-## Project Structure
+## Repository Structure
 
 ```
 LedgerFlow-lakehouse/
@@ -104,195 +130,99 @@ LedgerFlow-lakehouse/
 
 ---
 
-## Key Engineering Decisions
+## Quick Start
 
-**Debezium `ExtractNewRecordState` SMT**
-Flattens the Kafka envelope so each message contains flat fields + `__op` (double underscore), `__ts_ms`, `__before`. Consumed directly by the bridge without schema unpacking.
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/bnkr-breakthrough/LedgerFlow-lakehouse.git
+cd LedgerFlow-lakehouse
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
 
-**Unity Catalog External Location (not `spark.conf.set`)**
-Serverless compute blocks dynamic Spark configs for ADLS keys. Solution: Azure Access Connector (Managed Identity) → Storage Credential → External Location. Zero credential leakage — enterprise-grade pattern.
+# 2. Start infrastructure (PostgreSQL + Kafka + Debezium)
+cd infra && docker-compose up -d
 
-**`_metadata.file_path` instead of `input_file_name()`**
-Unity Catalog blocks `input_file_name()`. Auto Loader exposes `_metadata.file_path` as a built-in column — used for lineage tracking in Bronze tables.
+# 3. Seed banking data and register CDC connector
+python scripts/seed_data.py
+bash infra/debezium/register_connector.sh
 
-**DLT `APPLY CHANGES INTO` for SCD Type 1**
-Handles out-of-order CDC events using `sequence_by="__ts_ms"`. Deletes propagated via `apply_as_deletes=expr("__op = 'd'")`. Metadata columns excluded via `except_column_list`.
+# 4. Start CDC simulator + ADLS bridge
+python scripts/data_simulator.py          # Terminal 1
+python scripts/kafka_to_adls_bridge.py   # Terminal 2
 
-**`disbursed_at` epoch milliseconds**
-Debezium serializes PostgreSQL `TIMESTAMP` as BIGINT (epoch ms) in Kafka. Converted in DLT with `F.to_date(F.from_unixtime(col("disbursed_at") / 1000))`.
+# 5. Run Databricks Workflow
+# Jobs & Pipelines → LedgerFlow-Daily-Pipeline → Run now
 
-**Gold promotion pattern**
-DLT pipeline default schema = silver, so all tables land in silver. Gold tables promoted post-pipeline via `CREATE OR REPLACE TABLE gold.X AS SELECT * FROM silver.X`.
+# 6. Run E2E test
+python scripts/e2e_test.py --inject
+# (trigger workflow, then:)
+python scripts/e2e_test.py --verify
+```
+
+Full step-by-step setup in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Azure + Databricks Services Used
+
+| Service | Purpose | Cost |
+|---|---|---|
+| ADLS Gen2 | Raw zone storage (NDJSON, partitioned) | ~$0 (free credit) |
+| Azure Access Connector | Managed Identity for ADLS access | Free |
+| Databricks Serverless | Auto Loader + governance notebooks | Free trial |
+| Delta Live Tables | Silver + Gold CDC pipeline | Free trial |
+| Databricks SQL Warehouse | Dashboard queries | Free trial |
+| Databricks Workflows | 3-task pipeline orchestration | Free trial |
+
+**Total cloud cost for this project: ~$0** (Azure $200 free credit + Databricks trial)
 
 ---
 
 ## Data Model
 
-### Silver Layer
+Three banking entities with CDC-tracked changes:
 
-**customers** — 71 rows, CDC-merged, row-filtered + column-masked
 ```
-customer_id | name | email* | city** | state | annual_income* | credit_score | created_at
-* masked (non-admins: first char + ***@masked.com / NULL)
-** row filter: non-admins see South Indian cities only
-```
-
-**loans** — 90 rows, validated by DLT expectations
-```
-loan_id | customer_id | loan_type | loan_amount | interest_rate | tenure_months | status | disbursed_at
-DLT expectations: valid_loan_amount, valid_interest_rate (1-30), valid_tenure (12-360),
-                  valid_loan_type (HOME/PERSONAL/BUSINESS/AUTO), valid_status
-```
-
-**transactions** — 1500+ rows, deduplicated on `txn_id`
-```
-txn_id | loan_id | amount | txn_type | txn_date | remarks | created_at
-DLT expectations: valid_amount (>0), valid_txn_type, has_loan_id (NOT NULL)
+customers ──────────────────────────────── one customer → many loans
+    │  customer_id · credit_score · annual_income* · email*
+    │  * PII masked for non-admins via Unity Catalog column masks
+    ▼
+loans ──────────────────────────────────── one loan → many transactions
+    │  loan_id · loan_type · loan_amount · status · disbursed_at
+    │  status: pending → active → defaulted / closed
+    ▼
+transactions ───────────────────────────── EMI payments, disbursements, penalties
+       txn_id · loan_id · amount · txn_type · txn_date
+       txn_type: DISBURSEMENT · PAYMENT · PENALTY · FORECLOSURE
 ```
 
-### Gold Layer
-
-| Table | Description | Key Columns |
-|-------|-------------|-------------|
-| `portfolio_summary` | Loan count + exposure by type × status | loan_type, status, loan_count, total_exposure |
-| `customer_risk_profile` | Credit tier segmentation with active exposure | credit_tier, customer_count, active_loans, total_active_exposure |
-| `daily_collections` | EMI payment totals by date | txn_date, payment_count, total_collected, avg_emi |
-| `npa_watchlist` | Defaulted loans with borrower details | loan_id, borrower_name, city, credit_score, days_since_disbursement |
+**Simulated data:** Indian names, cities (Mumbai, Delhi, Bangalore, Hyderabad...), realistic loan amounts (₹50K–₹2Cr), interest rates 8.5–22%, credit scores 580–820.
 
 ---
 
-## Unity Catalog Governance
+## Scope Decisions
 
-```sql
--- Row-level security: non-admins see only South Indian city customers
-CREATE FUNCTION silver.city_row_filter(city STRING) RETURNS BOOLEAN
-RETURN IS_ACCOUNT_GROUP_MEMBER('admins')
-    OR city IN ('Chennai', 'Bangalore', 'Hyderabad', 'Kochi', 'Coimbatore', ...);
-
-ALTER TABLE silver.customers SET ROW FILTER silver.city_row_filter ON (city);
-
--- Column masking: email hidden for non-admins
-CREATE FUNCTION silver.mask_email(email STRING) RETURNS STRING
-RETURN CASE WHEN IS_ACCOUNT_GROUP_MEMBER('admins') THEN email
-            ELSE CONCAT(LEFT(email, 1), '***@masked.com') END;
-
-ALTER TABLE silver.customers ALTER COLUMN email SET MASK silver.mask_email;
-
--- RBAC grants on Gold layer
-GRANT SELECT ON TABLE gold.portfolio_summary TO `analyst_group`;
-```
+| Excluded | Reason |
+|---|---|
+| Kafka Connect ADLS Sink | Python bridge demonstrates the pattern explicitly; connector would be production shortcut |
+| Continuous streaming | `trigger(availableNow=True)` demonstrates batch-on-demand pattern; streaming would require always-on compute |
+| dbt transformations | DLT declarative pipeline covers transformation layer; dbt covered in other portfolio projects |
+| Real bank data | Synthetic data with realistic distributions — protects privacy, still demonstrates all pipeline patterns |
 
 ---
 
-## Databricks Workflow DAG
+## Documentation
 
-```
-bronze_ingestion  ──▶  Silver (DLT pipeline)  ──▶  Gold_Promotion
-  Notebook task          Pipeline task               Notebook task
-  ~1 min                 ~2.5 min                    ~1 min
-                                              Total: ~4.5 min
-```
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Component deep dive: CDC internals, Unity Catalog access pattern, DLT merge logic, data flow timing
+- [`docs/INTERVIEW_GUIDE.md`](docs/INTERVIEW_GUIDE.md) — 15+ Senior DE interview Q&A with production-scale extensions
 
 ---
 
-## Results
+## Related Projects
 
-| Metric | Value |
-|--------|-------|
-| Customers in Silver | 71 |
-| Loans in Silver | 90 |
-| Transactions in Silver | 1,500+ |
-| NPA Rate | 11.12% |
-| Total Loan Book | ₹25.67 Cr |
-| Active Exposure | ₹22+ Cr |
-| Files uploaded to ADLS | 277+ |
-| Total CDC events processed | 560+ |
-| Pipeline run time (end-to-end) | ~4.5 minutes |
-| Workflow runs succeeded | 2/2 |
-| E2E test result | 3/3 PASS |
-| Data quality quarantine rate | 0% |
+- [OrderLake](https://github.com/bnkr-breakthrough/OrderLake) — Serverless AWS data lake · Glue · Athena · PySpark · DQ scorecard
+- [FinShield](https://github.com/bnkr-breakthrough/finshield-fraud-platform) — Real-time fraud detection · Kafka · Spark · Snowflake · dbt · Streamlit
 
 ---
 
-## Running Locally
-
-### Prerequisites
-- Docker Desktop
-- Python 3.11+
-- Azure subscription (free $200 credit)
-- Databricks workspace (Azure — Premium tier)
-
-### 1. Start infrastructure
-```bash
-cd infra && docker-compose up -d
-```
-
-### 2. Install dependencies
-```bash
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3. Seed data + register CDC
-```bash
-python scripts/seed_data.py
-bash infra/debezium/register_connector.sh
-```
-
-### 4. Start simulator + bridge
-```bash
-# Terminal 1 — generate CDC events
-python scripts/data_simulator.py
-
-# Terminal 2 — stream to ADLS
-python scripts/kafka_to_adls_bridge.py
-```
-
-### 5. Run Databricks pipeline
-In Databricks UI: **Jobs & Pipelines → LedgerFlow-Daily-Pipeline → Run now**
-
-### 6. Run E2E test
-```bash
-python scripts/e2e_test.py --inject
-# trigger workflow, then:
-python scripts/e2e_test.py --verify
-```
-
----
-
-## Environment Variables
-
-Create a `.env` file (not committed to Git):
-```
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=ledgerflow
-POSTGRES_USER=ledgerflow
-POSTGRES_PASSWORD=ledgerflow123
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-ADLS_ACCOUNT_NAME=ledgerflowadls
-ADLS_ACCOUNT_KEY=<your-key>
-ADLS_CONTAINER=raw
-```
-
----
-
-## Skills Demonstrated
-
-- **CDC pipeline design** — PostgreSQL WAL → Debezium → Kafka → cloud storage
-- **Databricks Auto Loader** — incremental file ingestion with schema evolution and lineage
-- **Delta Live Tables** — declarative ETL with `APPLY CHANGES INTO`, expectations, quarantine tables
-- **Unity Catalog** — external locations, row-level security, column masking, automatic lineage
-- **Azure cloud** — ADLS Gen2, Access Connector, Managed Identity (no credential leakage)
-- **Pipeline orchestration** — Databricks Workflows 3-task DAG with dependency management
-- **Data quality engineering** — DLT expectations, quarantine tables, E2E test framework
-- **SQL analytics** — Databricks SQL Dashboard with 6 KPI panels on a dedicated SQL Warehouse
-
----
-
-## Author
-
-**Beeram Neela Konda Reddy**
-Senior Data Engineer | AWS Certified | SnowPro Core | Databricks Certified Data Engineer Associate
-
-[GitHub](https://github.com/bnkr-breakthrough)
+*Portfolio-scale project — demonstrates senior-level data engineering patterns on real cloud infrastructure. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for an honest assessment of what would differ at production scale.*
