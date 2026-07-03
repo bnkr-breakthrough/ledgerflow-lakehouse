@@ -1,0 +1,17 @@
+# ─── Database ───────────────────────────────────────────────────────────────
+psycopg2-binary==2.9.10         # PostgreSQL driver (2.9.10+ required for Python 3.13)
+
+# ─── Kafka ──────────────────────────────────────────────────────────────────
+confluent-kafka==2.6.1          # Kafka consumer (2.6.1 has pre-built wheels for Python 3.13 arm64)
+
+# ─── Azure / Cloud Storage ──────────────────────────────────────────────────
+azure-storage-file-datalake==12.15.0   # ADLS Gen2 SDK
+azure-identity==1.16.0                 # Azure auth (DefaultAzureCredential)
+
+# ─── Data Generation ────────────────────────────────────────────────────────
+faker==24.3.0                   # Realistic fake data for seed + simulator
+
+# ─── Utilities ──────────────────────────────────────────────────────────────
+python-dotenv==1.0.1            # Load .env variables
+requests==2.31.0                # Debezium REST API calls
+pandas==2.2.1                   # Data inspection / validation scripts
