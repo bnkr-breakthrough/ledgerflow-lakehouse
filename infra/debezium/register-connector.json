@@ -1,0 +1,29 @@
+{
+  "name": "ledgerflow-postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "ledgerflow",
+    "database.password": "ledgerflow123",
+    "database.dbname": "ledgerflowdb",
+    "database.server.name": "ledgerflow",
+    "topic.prefix": "ledgerflow",
+    "table.include.list": "public.customers,public.loans,public.transactions",
+    "plugin.name": "pgoutput",
+    "publication.name": "ledgerflow_pub",
+    "slot.name": "ledgerflow_slot",
+    "snapshot.mode": "initial",
+    "decimal.handling.mode": "double",
+    "timestamp.mode": "adaptive_time_microseconds",
+    "heartbeat.interval.ms": "10000",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.add.fields": "op,table,ts_ms,before",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false"
+  }
+}
